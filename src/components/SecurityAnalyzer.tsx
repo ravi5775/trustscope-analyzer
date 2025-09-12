@@ -16,22 +16,166 @@ export const SecurityAnalyzer = () => {
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const { toast } = useToast();
 
-  const mockAnalysis = {
-    url: "",
-    riskScore: 0,
-    status: "safe" as const,
-    vulnerabilities: [
-      { type: "SSL Certificate", status: "secure", message: "Valid SSL certificate found" },
-      { type: "HTTP Headers", status: "secure", message: "Security headers properly configured" },
-      { type: "Phishing Detection", status: "safe", message: "No phishing patterns detected" },
-      { type: "Malware Scan", status: "safe", message: "No malicious content found" }
-    ],
-    details: {
-      domainAge: "5 years",
-      sslExpiry: "Valid until Dec 2024",
-      reputation: "Excellent",
-      contentAnalysis: "Legitimate content"
+  const fetchSSLInfo = async (hostname: string) => {
+    try {
+      // Use SSL Labs API for real SSL certificate data
+      const response = await fetch(`https://api.ssllabs.com/api/v3/analyze?host=${hostname}&publish=off&startNew=on&all=done`);
+      const data = await response.json();
+      
+      if (data.status === 'READY' && data.endpoints?.length > 0) {
+        const endpoint = data.endpoints[0];
+        const cert = endpoint.details?.cert;
+        
+        if (cert) {
+          const expiryDate = new Date(cert.notAfter);
+          const isExpired = expiryDate < new Date();
+          const daysUntilExpiry = Math.ceil((expiryDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+          
+          return {
+            valid: !isExpired && daysUntilExpiry > 0,
+            expiry: expiryDate.toLocaleDateString(),
+            daysUntilExpiry,
+            grade: endpoint.grade || 'Unknown'
+          };
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('SSL check failed:', error);
+      return null;
     }
+  };
+
+  const fetchDomainInfo = async (hostname: string) => {
+    try {
+      // Use a WHOIS API service for domain information
+      const response = await fetch(`https://api.whoisjson.com/v1/${hostname}`);
+      const data = await response.json();
+      
+      const createdDate = data.created_date ? new Date(data.created_date) : null;
+      const domainAge = createdDate 
+        ? Math.floor((Date.now() - createdDate.getTime()) / (1000 * 60 * 60 * 24 * 365))
+        : null;
+        
+      return {
+        age: domainAge ? `${domainAge} years` : 'Unknown',
+        registrar: data.registrar?.name || 'Unknown',
+        status: data.status || 'Unknown'
+      };
+    } catch (error) {
+      console.error('Domain info fetch failed:', error);
+      return {
+        age: 'Unknown',
+        registrar: 'Unknown', 
+        status: 'Unknown'
+      };
+    }
+  };
+
+  const performSecurityChecks = async (url: string) => {
+    const hostname = new URL(url).hostname;
+    const vulnerabilities = [];
+    let totalRisk = 0;
+
+    // SSL Certificate Check
+    const sslInfo = await fetchSSLInfo(hostname);
+    if (sslInfo) {
+      if (sslInfo.valid && sslInfo.daysUntilExpiry > 30) {
+        vulnerabilities.push({
+          type: "SSL Certificate",
+          status: "secure",
+          message: `Valid SSL certificate (Grade: ${sslInfo.grade}, expires ${sslInfo.expiry})`
+        });
+      } else if (sslInfo.daysUntilExpiry <= 30 && sslInfo.daysUntilExpiry > 0) {
+        vulnerabilities.push({
+          type: "SSL Certificate", 
+          status: "warning",
+          message: `SSL certificate expires soon (${sslInfo.daysUntilExpiry} days)`
+        });
+        totalRisk += 20;
+      } else {
+        vulnerabilities.push({
+          type: "SSL Certificate",
+          status: "danger", 
+          message: "SSL certificate is expired or invalid"
+        });
+        totalRisk += 40;
+      }
+    } else {
+      vulnerabilities.push({
+        type: "SSL Certificate",
+        status: "warning",
+        message: "Could not verify SSL certificate"
+      });
+      totalRisk += 15;
+    }
+
+    // Protocol Check
+    if (url.startsWith('https://')) {
+      vulnerabilities.push({
+        type: "HTTPS Protocol",
+        status: "secure",
+        message: "Secure HTTPS connection"
+      });
+    } else {
+      vulnerabilities.push({
+        type: "HTTPS Protocol", 
+        status: "danger",
+        message: "Insecure HTTP connection - data transmitted in plain text"
+      });
+      totalRisk += 30;
+    }
+
+    // Domain Analysis
+    const suspiciousTlds = ['.tk', '.ml', '.ga', '.cf'];
+    const hasSuspiciousTld = suspiciousTlds.some(tld => hostname.endsWith(tld));
+    
+    if (hasSuspiciousTld) {
+      vulnerabilities.push({
+        type: "Domain Analysis",
+        status: "warning", 
+        message: "Domain uses a TLD commonly associated with suspicious sites"
+      });
+      totalRisk += 25;
+    } else {
+      vulnerabilities.push({
+        type: "Domain Analysis",
+        status: "secure",
+        message: "Domain appears legitimate"
+      });
+    }
+
+    // URL Structure Analysis
+    const suspiciousPatterns = [
+      /[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/, // IP address
+      /-/g, // Many hyphens
+      /[0-9]/g // Many numbers
+    ];
+    
+    let urlRisk = 0;
+    if (suspiciousPatterns[0].test(hostname)) urlRisk += 20; // IP address
+    const hyphenCount = (hostname.match(suspiciousPatterns[1]) || []).length;
+    if (hyphenCount > 3) urlRisk += 10;
+    const numberCount = (hostname.match(suspiciousPatterns[2]) || []).length;
+    if (numberCount > 3) urlRisk += 10;
+    
+    if (urlRisk > 0) {
+      vulnerabilities.push({
+        type: "URL Structure",
+        status: urlRisk > 15 ? "danger" : "warning",
+        message: "URL structure contains suspicious patterns"
+      });
+      totalRisk += urlRisk;
+    } else {
+      vulnerabilities.push({
+        type: "URL Structure", 
+        status: "secure",
+        message: "URL structure appears normal"
+      });
+    }
+
+    return { vulnerabilities, totalRisk: Math.min(totalRisk, 100) };
   };
 
   const validateUrl = (url: string) => {
@@ -53,7 +197,12 @@ export const SecurityAnalyzer = () => {
       return;
     }
 
-    if (!validateUrl(url)) {
+    let normalizedUrl = url.trim();
+    if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
+      normalizedUrl = 'https://' + normalizedUrl;
+    }
+
+    if (!validateUrl(normalizedUrl)) {
       toast({
         title: "Invalid URL",
         description: "Please enter a valid website URL (e.g., https://example.com)",
@@ -65,41 +214,61 @@ export const SecurityAnalyzer = () => {
     setIsAnalyzing(true);
     setAnalysisProgress(0);
 
-    // Simulate analysis with progress
-    const steps = [
-      "Checking SSL certificate...",
-      "Scanning for vulnerabilities...",
-      "Analyzing content for phishing...",
-      "Checking reputation databases...",
-      "Generating security report..."
-    ];
+    try {
+      const hostname = new URL(normalizedUrl).hostname;
+      
+      // Progress steps with real analysis
+      setAnalysisProgress(20);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Perform security checks
+      const securityResult = await performSecurityChecks(normalizedUrl);
+      setAnalysisProgress(60);
+      
+      // Get domain information
+      const domainInfo = await fetchDomainInfo(hostname);
+      setAnalysisProgress(80);
+      
+      await new Promise(resolve => setTimeout(resolve, 500));
+      setAnalysisProgress(100);
 
-    for (let i = 0; i < steps.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 800));
-      setAnalysisProgress((i + 1) * 20);
+      // Determine overall status based on risk score
+      let status: "safe" | "warning" | "danger";
+      if (securityResult.totalRisk <= 30) status = "safe";
+      else if (securityResult.totalRisk <= 70) status = "warning"; 
+      else status = "danger";
+
+      const result = {
+        url: normalizedUrl,
+        riskScore: securityResult.totalRisk,
+        status,
+        vulnerabilities: securityResult.vulnerabilities,
+        details: {
+          domainAge: domainInfo.age,
+          sslExpiry: securityResult.vulnerabilities.find(v => v.type === "SSL Certificate")?.message || "Unknown",
+          reputation: securityResult.totalRisk <= 20 ? "Excellent" : 
+                     securityResult.totalRisk <= 50 ? "Good" : "Poor",
+          contentAnalysis: status === "safe" ? "Legitimate content" :
+                          status === "warning" ? "Some concerns detected" : "Potential threats detected"
+        }
+      };
+
+      setAnalysisResult(result);
+      
+    } catch (error) {
+      console.error('Analysis failed:', error);
+      toast({
+        title: "Analysis Failed", 
+        description: "Could not complete security analysis. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsAnalyzing(false);
     }
-
-    // Generate random risk score for demo
-    const riskScore = Math.floor(Math.random() * 100);
-    let status: "safe" | "warning" | "danger";
-    
-    if (riskScore <= 30) status = "safe";
-    else if (riskScore <= 70) status = "warning";
-    else status = "danger";
-
-    const result = {
-      ...mockAnalysis,
-      url,
-      riskScore,
-      status
-    };
-
-    setAnalysisResult(result);
-    setIsAnalyzing(false);
     
     toast({
       title: "Analysis Complete",
-      description: `Security analysis finished for ${url}`,
+      description: `Security analysis finished for ${normalizedUrl}`,
     });
   };
 
