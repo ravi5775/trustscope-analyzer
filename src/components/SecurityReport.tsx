@@ -79,7 +79,7 @@ export const SecurityReport = ({ analysis }: SecurityReportProps) => {
       </Card>
 
       <Tabs defaultValue="vulnerabilities" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 bg-muted/30">
+        <TabsList className="grid w-full grid-cols-4 bg-muted/30">
           <TabsTrigger value="vulnerabilities" className="flex items-center gap-2">
             <Shield className="w-4 h-4" />
             Security Checks
@@ -91,6 +91,10 @@ export const SecurityReport = ({ analysis }: SecurityReportProps) => {
           <TabsTrigger value="summary" className="flex items-center gap-2">
             <Award className="w-4 h-4" />
             Summary
+          </TabsTrigger>
+          <TabsTrigger value="report" className="flex items-center gap-2">
+            <FileText className="w-4 h-4" />
+            Technical Report
           </TabsTrigger>
         </TabsList>
 
@@ -244,6 +248,95 @@ export const SecurityReport = ({ analysis }: SecurityReportProps) => {
                     </p>
                   </div>
                 )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="report">
+          <Card className="glass-card">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-3">
+                <FileText className="w-5 h-5 text-primary" />
+                Technical Methodology Report
+              </CardTitle>
+              <CardDescription>
+                How this assessment was performed and the data sources used
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <h3 className="text-lg font-semibold">Abstract</h3>
+                <p className="text-sm text-muted-foreground">
+                  This client-side analyzer estimates website risk by combining Certificate Transparency data,
+                  protocol checks, URL heuristics, and domain reputation signals. Results are computed in real time in
+                  your browser without sending the URL to a server.
+                </p>
+              </div>
+
+              <Separator />
+
+              <div className="grid md:grid-cols-2 gap-6">
+                <div className="space-y-3">
+                  <h4 className="font-medium">Technologies</h4>
+                  <ul className="list-disc pl-6 text-sm text-muted-foreground space-y-1">
+                    <li>React 18 with TypeScript (Vite)</li>
+                    <li>Tailwind CSS design system with shadcn/ui components</li>
+                    <li>Lucide icons and small utility helpers</li>
+                  </ul>
+                </div>
+                <div className="space-y-3">
+                  <h4 className="font-medium">Datasets & Sources</h4>
+                  <ul className="list-disc pl-6 text-sm text-muted-foreground space-y-1">
+                    <li>Certificate Transparency via crt.sh (output=json) for SSL expiry and issuer</li>
+                    <li>Heuristic URL analysis (structure, hyphens, numbers, IPs)</li>
+                    <li>Reputation scoring based on domain age and TLD characteristics</li>
+                  </ul>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <h4 className="font-medium">Identification Workflow</h4>
+                <ol className="list-decimal pl-6 text-sm text-muted-foreground space-y-1">
+                  <li>Normalize URL and verify HTTPS scheme.</li>
+                  <li>Query CT logs for the exact hostname; if no match, query base domain and match wildcard SANs.</li>
+                  <li>Filter CT entries to SANs that exactly or wildcard-match the hostname; ignore lookalike names.</li>
+                  <li>Compute SSL validity from the certificate not_after date; fallback to HTTPS-present if CT is inconclusive.</li>
+                  <li>Evaluate URL structure and apply reputation heuristics to derive a total risk score.</li>
+                </ol>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <h4 className="font-medium">Limitations</h4>
+                <p className="text-sm text-muted-foreground">
+                  Browser-only environments cannot directly read a site’s live certificate chain or WHOIS. CT data may
+                  omit private or recently rotated certificates. The analyzer uses conservative fallbacks to avoid false
+                  alarms on trusted HTTPS sites.
+                </p>
+              </div>
+
+              <Separator />
+
+              <div className="grid md:grid-cols-3 gap-4">
+                <div className="p-4 bg-muted/20 rounded-lg">
+                  <p className="text-xs text-muted-foreground">URL</p>
+                  <p className="text-sm font-medium break-all">{analysis.url}</p>
+                </div>
+                <div className="p-4 bg-muted/20 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Risk Score</p>
+                  <p className="text-sm font-medium">{analysis.riskScore}/100</p>
+                </div>
+                <div className="p-4 bg-muted/20 rounded-lg">
+                  <p className="text-xs text-muted-foreground">Status</p>
+                  <div className="mt-1">{(() => {
+                    const status = analysis.status;
+                    const variants: any = { safe: "status-safe", warning: "status-warning", danger: "status-danger" };
+                    return <Badge className={variants[status] || "bg-muted"}>{status.toUpperCase()}</Badge>;
+                  })()}</div>
+                </div>
               </div>
             </CardContent>
           </Card>

@@ -18,33 +18,68 @@ export const SecurityAnalyzer = () => {
 
   const fetchRealDomainData = async (hostname: string, isHttps: boolean) => {
     try {
-      // Fetch Certificate Transparency entries and pick the most recent not_after
-      const ctResponse = await fetch(`https://crt.sh/?q=${encodeURIComponent(hostname)}&output=json`);
-      const ctData = await ctResponse.json();
+      // Helper: check if SAN matches host (exact or wildcard)
+      const hostnameLc = hostname.toLowerCase();
+      const wildcardMatches = (san: string, host: string) => {
+        const s = san.toLowerCase();
+        if (s.startsWith('*.')) {
+          const suffix = s.slice(1); // remove leading *
+          return host.endsWith(suffix) && host.split('.').length >= s.split('.').length;
+        }
+        return s === host;
+      };
+
+      const extractSANs = (nameValue: string): string[] =>
+        String(nameValue)
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+      const fetchCT = async (q: string) => {
+        const res = await fetch(`https://crt.sh/?q=${encodeURIComponent(q)}&output=json`);
+        return (await res.json()) as any[];
+      };
+
+      const tryFindCert = (entries: any[], host: string) => {
+        const candidates = entries
+          .filter((e) => {
+            const sans = extractSANs(e.name_value);
+            return sans.some((san) => wildcardMatches(san, host));
+          })
+          .map((e) => ({
+            notAfter: new Date(e.not_after),
+            issuer: e.issuer_name || 'Unknown CA',
+          }))
+          .filter((c) => !isNaN(c.notAfter.getTime()))
+          .sort((a, b) => b.notAfter.getTime() - a.notAfter.getTime());
+        return candidates[0] || null;
+      };
+
+      // 1) Query for the full hostname
+      let entries = await fetchCT(hostnameLc);
+      let latest = tryFindCert(entries, hostnameLc);
+
+      // 2) Fallback: query base domain and match wildcard SANs
+      if (!latest) {
+        const parts = hostnameLc.split('.');
+        if (parts.length > 2) {
+          const base = parts.slice(-2).join('.');
+          entries = await fetchCT(base);
+          latest = tryFindCert(entries, hostnameLc);
+        }
+      }
 
       let sslInfo: null | { valid: boolean; expiry: string; daysUntilExpiry: number | null; issuer: string } = null;
 
-      if (Array.isArray(ctData) && ctData.length > 0) {
-        // Some entries may be duplicates or for subdomains; sort by not_after desc and use the latest
-        const validDates = ctData
-          .map((cert: any) => ({
-            notAfter: new Date(cert.not_after),
-            issuer: cert.issuer_name || 'Unknown CA',
-          }))
-          .filter((c: any) => !isNaN(c.notAfter.getTime()))
-          .sort((a: any, b: any) => b.notAfter.getTime() - a.notAfter.getTime());
-
-        if (validDates.length > 0) {
-          const latest = validDates[0];
-          const now = Date.now();
-          const daysUntilExpiry = Math.ceil((latest.notAfter.getTime() - now) / (1000 * 60 * 60 * 24));
-          sslInfo = {
-            valid: daysUntilExpiry > 0,
-            expiry: latest.notAfter.toLocaleDateString(),
-            daysUntilExpiry,
-            issuer: latest.issuer,
-          };
-        }
+      if (latest) {
+        const now = Date.now();
+        const daysUntilExpiry = Math.ceil((latest.notAfter.getTime() - now) / (1000 * 60 * 60 * 24));
+        sslInfo = {
+          valid: daysUntilExpiry > 0,
+          expiry: latest.notAfter.toLocaleDateString(),
+          daysUntilExpiry,
+          issuer: latest.issuer,
+        };
       }
 
       // Fallback: if we couldn't read CT data but the URL is HTTPS, assume SSL is present (expiry unknown)
